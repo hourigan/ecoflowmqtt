@@ -1,0 +1,5 @@
+paho-mqtt>=2.1.0
+requests>=2.32.0
+
+[dev]
+pytest>=8.0.0

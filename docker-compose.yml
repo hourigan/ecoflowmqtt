@@ -1,0 +1,7 @@
+services:
+  ecoflow-mqtt:
+    build: .
+    container_name: ecoflow-mqtt
+    env_file:
+      - .env
+    restart: unless-stopped
