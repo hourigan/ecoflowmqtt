@@ -30,13 +30,15 @@ python3 -m venv .venv
 pip install -e ".[dev]"
 ```
 
-Create your environment file:
+Create your environment and secrets files:
 
 ```bash
 cp .env.example .env
+cp secrets.yml.example secrets.yml
 ```
 
-Edit `.env` with your EcoFlow developer credentials and local MQTT broker details.
+Edit `.env` with normal runtime settings, and `secrets.yml` with your EcoFlow
+developer credentials and local MQTT broker credentials.
 
 ## Running
 
@@ -68,13 +70,15 @@ If your Docker install uses the legacy Compose command:
 docker-compose up -d --build
 ```
 
-The Compose service loads `.env` as environment variables with `env_file`. Secrets are not copied into the image because `.env` is excluded by `.dockerignore`.
+The Compose service loads `.env` as environment variables with `env_file` and
+mounts `secrets.yml` read-only at `/app/secrets.yml`. Environment variables take
+precedence when a value is present in both places.
 
 To run without Compose:
 
 ```bash
 docker build -t ecoflow-mqtt .
-docker run -d --name ecoflow-mqtt --restart unless-stopped --env-file .env ecoflow-mqtt
+docker run -d --name ecoflow-mqtt --restart unless-stopped --env-file .env -v "$PWD/secrets.yml:/app/secrets.yml:ro" ecoflow-mqtt
 ```
 
 View logs:

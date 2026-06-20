@@ -1,6 +1,6 @@
 import os
 
-from ecoflow_mqtt.config import _get_mqtt_endpoint
+from ecoflow_mqtt.config import Config, _get_mqtt_endpoint
 from ecoflow_mqtt.ecoflow import Device, flatten_params, sign_request, signature_payload
 from ecoflow_mqtt.mqtt import MqttPublisher, iter_leaf_values, safe_topic_part
 
@@ -58,13 +58,58 @@ def test_mqtt_endpoint_parses_url_credentials() -> None:
         os.environ["MQTT_HOST"] = "mqtt://user:pass@mqtt.dockerapp.net:1883"
         os.environ.pop("MQTT_USERNAME", None)
         os.environ.pop("MQTT_PASSWORD", None)
-        assert _get_mqtt_endpoint() == ("mqtt.dockerapp.net", 1883, "user", "pass")
+        assert _get_mqtt_endpoint({}) == ("mqtt.dockerapp.net", 1883, "user", "pass")
     finally:
         for key, value in old_values.items():
             if value is None:
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
+
+
+def test_config_loads_credentials_from_secrets_yml(monkeypatch, tmp_path) -> None:
+    secrets_file = tmp_path / "secrets.yml"
+    secrets_file.write_text(
+        "\n".join(
+            [
+                'ECOFLOW_ACCESS_KEY: "access-from-file"',
+                'ECOFLOW_SECRET_KEY: "secret-from-file"',
+                'MQTT_USERNAME: "mqtt-user"',
+                'MQTT_PASSWORD: "mqtt-pass"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    for key in (
+        "ECOFLOW_ACCESS_KEY",
+        "ECOFLOW_SECRET_KEY",
+        "ECOFLOW_API_HOST",
+        "ECOFLOW_DEVICE_SNS",
+        "ECOFLOW_QUOTAS",
+        "ECOFLOW_EXTRA_QUOTAS",
+        "ECOFLOW_STREAM_SECONDS",
+        "POLL_INTERVAL_SECONDS",
+        "MQTT_PORT",
+        "MQTT_USERNAME",
+        "MQTT_PASSWORD",
+        "MQTT_CLIENT_ID",
+        "MQTT_TOPIC_PREFIX",
+        "MQTT_RETAIN",
+        "MQTT_PUBLISH_INDIVIDUAL",
+        "LOG_LEVEL",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    monkeypatch.setenv("ECOFLOW_SECRETS_FILE", str(secrets_file))
+    monkeypatch.setenv("MQTT_HOST", "mqtt.example.net")
+
+    config = Config.from_env()
+
+    assert config.ecoflow_access_key == "access-from-file"
+    assert config.ecoflow_secret_key == "secret-from-file"
+    assert config.mqtt_username == "mqtt-user"
+    assert config.mqtt_password == "mqtt-pass"
 
 
 def test_iter_leaf_values_flattens_nested_quota_data() -> None:

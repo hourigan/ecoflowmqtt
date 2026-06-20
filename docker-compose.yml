@@ -4,4 +4,6 @@ services:
     container_name: ecoflow-mqtt
     env_file:
       - .env
+    volumes:
+      - ./secrets.yml:/app/secrets.yml:ro
     restart: unless-stopped
