@@ -3,11 +3,13 @@ from __future__ import annotations
 import argparse
 import logging
 import signal
+import sys
 import time
 from datetime import datetime, timezone
 
 from ecoflow_mqtt.config import Config
 from ecoflow_mqtt.ecoflow import EcoFlowClient
+from ecoflow_mqtt.health import HealthCheckError, check_health_status, write_health_status
 from ecoflow_mqtt.mqtt import MqttPublisher
 from ecoflow_mqtt.stream import EcoFlowStreamClient
 
@@ -83,8 +85,14 @@ def run(config: Config, once: bool = False) -> None:
         while not shutdown.requested:
             try:
                 poll_once(config, ecoflow, publisher)
+                write_health_status(config.health_status_file, "ok")
             except Exception:
                 LOGGER.exception("Polling cycle failed")
+                write_health_status(
+                    config.health_status_file,
+                    "error",
+                    "Last polling cycle failed; inspect container logs for the traceback.",
+                )
 
             if once:
                 break
@@ -102,8 +110,23 @@ def main() -> None:
         description="Poll EcoFlow Open Platform devices and publish readings to MQTT.",
     )
     parser.add_argument("--once", action="store_true", help="Run one polling cycle and exit.")
+    parser.add_argument(
+        "--healthcheck",
+        action="store_true",
+        help="Validate the application health status file and exit.",
+    )
     args = parser.parse_args()
-    run(Config.from_env(), once=args.once)
+    config = Config.from_env()
+    if args.healthcheck:
+        try:
+            check_health_status(config.health_status_file, config.healthcheck_max_age_seconds)
+        except HealthCheckError as exc:
+            print(f"unhealthy: {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
+        print("healthy")
+        return
+
+    run(config, once=args.once)
 
 
 if __name__ == "__main__":

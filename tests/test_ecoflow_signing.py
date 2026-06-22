@@ -1,7 +1,10 @@
+import json
 import os
+import time
 
 from ecoflow_mqtt.config import Config, _get_mqtt_endpoint
 from ecoflow_mqtt.ecoflow import Device, flatten_params, sign_request, signature_payload
+from ecoflow_mqtt.health import HealthCheckError, check_health_status, write_health_status
 from ecoflow_mqtt.mqtt import MqttPublisher, iter_leaf_values, safe_topic_part
 
 
@@ -97,6 +100,8 @@ def test_config_loads_credentials_from_secrets_yml(monkeypatch, tmp_path) -> Non
         "MQTT_TOPIC_PREFIX",
         "MQTT_RETAIN",
         "MQTT_PUBLISH_INDIVIDUAL",
+        "HEALTH_STATUS_FILE",
+        "HEALTHCHECK_MAX_AGE_SECONDS",
         "LOG_LEVEL",
     ):
         monkeypatch.delenv(key, raising=False)
@@ -110,6 +115,44 @@ def test_config_loads_credentials_from_secrets_yml(monkeypatch, tmp_path) -> Non
     assert config.ecoflow_secret_key == "secret-from-file"
     assert config.mqtt_username == "mqtt-user"
     assert config.mqtt_password == "mqtt-pass"
+    assert config.health_status_file == "/tmp/ecoflow-mqtt-health.json"
+    assert config.healthcheck_max_age_seconds == 170
+
+
+def test_health_check_accepts_recent_success(tmp_path) -> None:
+    status_file = tmp_path / "health.json"
+
+    write_health_status(str(status_file), "ok")
+
+    check_health_status(str(status_file), max_age_seconds=30)
+
+
+def test_health_check_rejects_recorded_error(tmp_path) -> None:
+    status_file = tmp_path / "health.json"
+
+    write_health_status(str(status_file), "error", "poll failed")
+
+    try:
+        check_health_status(str(status_file), max_age_seconds=30)
+    except HealthCheckError as exc:
+        assert "poll failed" in str(exc)
+    else:
+        raise AssertionError("expected health check to fail")
+
+
+def test_health_check_rejects_stale_success(tmp_path) -> None:
+    status_file = tmp_path / "health.json"
+    write_health_status(str(status_file), "ok")
+    payload = json.loads(status_file.read_text(encoding="utf-8"))
+    payload["updated_at_epoch"] = time.time() - 120
+    status_file.write_text(json.dumps(payload), encoding="utf-8")
+
+    try:
+        check_health_status(str(status_file), max_age_seconds=30)
+    except HealthCheckError as exc:
+        assert "stale" in str(exc)
+    else:
+        raise AssertionError("expected health check to fail")
 
 
 def test_iter_leaf_values_flattens_nested_quota_data() -> None:

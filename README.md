@@ -87,6 +87,11 @@ View logs:
 docker logs -f ecoflow-mqtt
 ```
 
+Compose includes a Docker health check that runs `ecoflow-mqtt --healthcheck`.
+The app records each polling cycle in a local status file: successful cycles mark
+the container healthy, failed cycles mark it unhealthy, and old successes become
+unhealthy after `HEALTHCHECK_MAX_AGE_SECONDS`.
+
 ## Configuration
 
 | Variable | Required | Default | Description |
@@ -99,6 +104,8 @@ docker logs -f ecoflow-mqtt
 | `ECOFLOW_EXTRA_QUOTAS` | no | common STREAM PV/MPPT candidates | Extra comma-separated quota names to request in addition to all quotas. |
 | `ECOFLOW_STREAM_SECONDS` | no | `20` | Seconds to collect EcoFlow cloud MQTT stream quota updates each poll. |
 | `POLL_INTERVAL_SECONDS` | no | `60` | Seconds between polling cycles. |
+| `HEALTH_STATUS_FILE` | no | `/tmp/ecoflow-mqtt-health.json` | File written by the app and read by Docker health checks. |
+| `HEALTHCHECK_MAX_AGE_SECONDS` | no | at least two poll intervals plus stream time | Maximum age of the last successful poll before the health check fails. |
 | `MQTT_HOST` | yes | | Local MQTT broker hostname or IP. |
 | `MQTT_PORT` | no | `1883` | Local MQTT broker port. |
 | `MQTT_USERNAME` | no | | Local MQTT username. |

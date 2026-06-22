@@ -85,7 +85,8 @@ def _get_csv(name: str, secrets: dict[str, str]) -> list[str]:
 
 
 def _get_mqtt_endpoint(secrets: dict[str, str] | None = None) -> tuple[str, int, str | None, str | None]:
-    secrets = secrets or _load_secrets()
+    if secrets is None:
+        secrets = _load_secrets()
     raw_host = _get_required("MQTT_HOST", secrets)
     default_port = int(_get_value("MQTT_PORT", secrets) or "1883")
     username = _get_value("MQTT_USERNAME", secrets) or None
@@ -122,12 +123,16 @@ class Config:
     mqtt_topic_prefix: str
     mqtt_retain: bool
     mqtt_publish_individual: bool
+    health_status_file: str
+    healthcheck_max_age_seconds: int
     log_level: str
 
     @classmethod
     def from_env(cls) -> "Config":
         secrets = _load_secrets()
         mqtt_host, mqtt_port, mqtt_username, mqtt_password = _get_mqtt_endpoint(secrets)
+        ecoflow_stream_seconds = int(_get_value("ECOFLOW_STREAM_SECONDS", secrets) or "20")
+        poll_interval_seconds = int(_get_value("POLL_INTERVAL_SECONDS", secrets) or "60")
         return cls(
             ecoflow_access_key=_get_required("ECOFLOW_ACCESS_KEY", secrets),
             ecoflow_secret_key=_get_required("ECOFLOW_SECRET_KEY", secrets),
@@ -135,8 +140,8 @@ class Config:
             ecoflow_device_sns=_get_csv("ECOFLOW_DEVICE_SNS", secrets),
             ecoflow_quotas=_get_csv("ECOFLOW_QUOTAS", secrets),
             ecoflow_extra_quotas=_get_csv("ECOFLOW_EXTRA_QUOTAS", secrets) or DEFAULT_EXTRA_QUOTAS,
-            ecoflow_stream_seconds=int(_get_value("ECOFLOW_STREAM_SECONDS", secrets) or "20"),
-            poll_interval_seconds=int(_get_value("POLL_INTERVAL_SECONDS", secrets) or "60"),
+            ecoflow_stream_seconds=ecoflow_stream_seconds,
+            poll_interval_seconds=poll_interval_seconds,
             mqtt_host=mqtt_host,
             mqtt_port=mqtt_port,
             mqtt_username=mqtt_username,
@@ -145,5 +150,10 @@ class Config:
             mqtt_topic_prefix=(_get_value("MQTT_TOPIC_PREFIX", secrets) or "ecoflow").strip("/"),
             mqtt_retain=_get_bool("MQTT_RETAIN", True, secrets),
             mqtt_publish_individual=_get_bool("MQTT_PUBLISH_INDIVIDUAL", True, secrets),
+            health_status_file=_get_value("HEALTH_STATUS_FILE", secrets) or "/tmp/ecoflow-mqtt-health.json",
+            healthcheck_max_age_seconds=int(
+                _get_value("HEALTHCHECK_MAX_AGE_SECONDS", secrets)
+                or str(max(120, poll_interval_seconds * 2 + ecoflow_stream_seconds + 30))
+            ),
             log_level=_get_value("LOG_LEVEL", secrets) or "INFO",
         )

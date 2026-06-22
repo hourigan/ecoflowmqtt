@@ -6,4 +6,10 @@ services:
       - .env
     volumes:
       - ./secrets.yml:/app/secrets.yml:ro
+    healthcheck:
+      test: ["CMD", "ecoflow-mqtt", "--healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 2m
     restart: unless-stopped
