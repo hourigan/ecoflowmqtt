@@ -11,7 +11,9 @@ For each device, the service publishes:
 - `ecoflow/<device_sn>/quota/<quota_name>`: individual quota values, when `MQTT_PUBLISH_INDIVIDUAL=true`.
 - `ecoflow/<device_sn>/quota/<nested_quota_path>`: nested quota leaf values flattened into sensor-friendly topics.
 
-Quota names are sanitized for MQTT topics by replacing `/`, spaces, and other unsafe characters with `_`.
+Quota names are percent encoded for MQTT topics, so distinct names cannot overwrite each other.
+Nested quota leaves use additional topic levels, such as `quota/energyStrategyOperateMode/operateSelfPoweredOpen`.
+When a quota disappears or a device is no longer returned, the service clears its previously published retained topics. A topic inventory is saved so cleanup also works after a restart.
 
 STREAM MPPT/PV socket data is collected from EcoFlow's cloud MQTT quota stream because the HTTP quota endpoint may only return aggregate PV values. When EcoFlow returns these values, they are published under `quota/...` topics. For STREAM Ultra, useful fields include:
 
@@ -73,12 +75,13 @@ docker-compose up -d --build
 The Compose service loads `.env` as environment variables with `env_file` and
 mounts `secrets.yml` read-only at `/app/secrets.yml`. Environment variables take
 precedence when a value is present in both places.
+Compose also keeps the retained topic inventory in a named volume.
 
 To run without Compose:
 
 ```bash
 docker build -t ecoflow-mqtt .
-docker run -d --name ecoflow-mqtt --restart unless-stopped --env-file .env -v "$PWD/secrets.yml:/app/secrets.yml:ro" ecoflow-mqtt
+docker run -d --name ecoflow-mqtt --restart unless-stopped --env-file .env -e MQTT_TOPIC_STATE_FILE=/app/state/published-topics.json -v "$PWD/secrets.yml:/app/secrets.yml:ro" -v ecoflow-mqtt-state:/app/state ecoflow-mqtt
 ```
 
 View logs:
@@ -114,6 +117,7 @@ unhealthy after `HEALTHCHECK_MAX_AGE_SECONDS`.
 | `MQTT_TOPIC_PREFIX` | no | `ecoflow` | MQTT topic prefix. |
 | `MQTT_RETAIN` | no | `true` | Whether MQTT messages are retained. |
 | `MQTT_PUBLISH_INDIVIDUAL` | no | `true` | Publish each quota on its own topic as well as the full JSON state. |
+| `MQTT_TOPIC_STATE_FILE` | no | `/tmp/ecoflow-mqtt-topics.json` | File recording retained topics for cleanup after restarts. Compose stores it in a named volume. |
 | `LOG_LEVEL` | no | `INFO` | Python logging level. |
 
 ## Notes
@@ -121,6 +125,10 @@ unhealthy after `HEALTHCHECK_MAX_AGE_SECONDS`.
 EcoFlow signs requests with HMAC-SHA256 over sorted request parameters plus `accessKey`, `nonce`, and `timestamp`. This implementation includes a regression test using EcoFlow's published signing example.
 
 The service reads baseline data from EcoFlow over HTTPS, collects richer STREAM telemetry from EcoFlow's cloud MQTT quota stream, and writes normalized sensor topics to your local MQTT broker.
+If the EcoFlow stream is unavailable, the service logs the failure and continues publishing HTTP readings.
+One-shot runs (`--once`) exit with a failure status when polling fails.
+
+Upgrading from older versions changes topics for names containing spaces or other encoded characters, and for nested quota leaves. Clear any old retained topics from the broker after upgrading; older versions did not record a topic inventory.
 
 See [docs/ecoflow-fields.md](docs/ecoflow-fields.md) for the observed EcoFlow
 API fields, categories, source endpoints, and derived MQTT sensor mappings.

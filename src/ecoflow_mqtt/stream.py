@@ -27,15 +27,42 @@ class EcoFlowStreamClient:
         protocol = str(certification.get("protocol") or "").lower()
 
         collected: dict[str, dict[str, Any]] = {sn: {} for sn in sns}
-        connected = threading.Event()
+        ready = threading.Event()
+        connection_error: list[Exception] = []
+        pending_subscriptions: set[int] = set()
         lock = threading.Lock()
+        collecting = True
 
         def on_connect(client: Any, _userdata: Any, _flags: Any, reason_code: Any, _properties: Any) -> None:
-            if str(reason_code).lower() not in {"0", "success"} and getattr(reason_code, "is_failure", False):
+            if getattr(reason_code, "is_failure", False) or str(reason_code).lower() not in {"0", "success"}:
+                connection_error.append(RuntimeError(f"EcoFlow stream connection rejected: {reason_code}"))
+                ready.set()
                 return
             for sn in sns:
-                client.subscribe(f"/open/{account}/{sn}/quota")
-            connected.set()
+                result, message_id = client.subscribe(f"/open/{account}/{sn}/quota")
+                if result != mqtt.MQTT_ERR_SUCCESS:
+                    connection_error.append(RuntimeError(f"EcoFlow stream subscription failed for {sn}: rc={result}"))
+                    ready.set()
+                    return
+                pending_subscriptions.add(message_id)
+
+        def on_subscribe(
+            _client: Any, _userdata: Any, message_id: int, reason_codes: Any, _properties: Any
+        ) -> None:
+            if any(getattr(code, "is_failure", False) for code in reason_codes):
+                connection_error.append(RuntimeError(f"EcoFlow stream subscription rejected: mid={message_id}"))
+                ready.set()
+                return
+            pending_subscriptions.discard(message_id)
+            if not pending_subscriptions:
+                ready.set()
+
+        def on_disconnect(
+            _client: Any, _userdata: Any, _flags: Any, reason_code: Any, _properties: Any
+        ) -> None:
+            if collecting:
+                connection_error.append(RuntimeError(f"EcoFlow stream disconnected: {reason_code}"))
+                ready.set()
 
         def on_message(_client: Any, _userdata: Any, message: Any) -> None:
             try:
@@ -55,6 +82,8 @@ class EcoFlowStreamClient:
 
         client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="ecoflow-mqtt-stream")
         client.on_connect = on_connect
+        client.on_subscribe = on_subscribe
+        client.on_disconnect = on_disconnect
         client.on_message = on_message
         client.username_pw_set(account, password)
         if protocol == "mqtts" or port == 8883:
@@ -63,9 +92,15 @@ class EcoFlowStreamClient:
         client.connect(host, port, keepalive=30)
         client.loop_start()
         try:
-            connected.wait(timeout=10)
+            if not ready.wait(timeout=10):
+                raise TimeoutError("Timed out connecting to EcoFlow stream")
+            if connection_error:
+                raise connection_error[0]
             time.sleep(seconds)
+            if connection_error:
+                raise connection_error[0]
         finally:
+            collecting = False
             client.loop_stop()
             client.disconnect()
 

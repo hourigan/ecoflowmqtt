@@ -33,10 +33,13 @@ def poll_once(config: Config, ecoflow: EcoFlowClient, publisher: MqttPublisher) 
     stream_quotas: dict[str, dict[str, object]] = {}
     if config.ecoflow_stream_seconds > 0 and devices:
         LOGGER.info("Collecting EcoFlow stream quota updates for %s second(s)", config.ecoflow_stream_seconds)
-        stream_quotas = EcoFlowStreamClient(ecoflow).collect_quotas(
-            [device.sn for device in devices],
-            config.ecoflow_stream_seconds,
-        )
+        try:
+            stream_quotas = EcoFlowStreamClient(ecoflow).collect_quotas(
+                [device.sn for device in devices],
+                config.ecoflow_stream_seconds,
+            )
+        except Exception:
+            LOGGER.exception("EcoFlow stream unavailable; continuing with HTTP quotas")
 
     LOGGER.info("Polling %s EcoFlow device(s)", len(devices))
     for device in devices:
@@ -51,6 +54,7 @@ def poll_once(config: Config, ecoflow: EcoFlowClient, publisher: MqttPublisher) 
         timestamp = datetime.now(timezone.utc).isoformat()
         publisher.publish_device_state(device, quotas, timestamp)
         LOGGER.info("Published %s quota value(s) for %s", len(quotas), device.sn)
+    publisher.finish_cycle({device.sn for device in devices})
 
 
 def run(config: Config, once: bool = False) -> None:
@@ -77,6 +81,7 @@ def run(config: Config, once: bool = False) -> None:
         topic_prefix=config.mqtt_topic_prefix,
         retain=config.mqtt_retain,
         publish_individual=config.mqtt_publish_individual,
+        topic_state_file=config.mqtt_topic_state_file,
     )
 
     publisher.connect()
@@ -93,6 +98,8 @@ def run(config: Config, once: bool = False) -> None:
                     "error",
                     "Last polling cycle failed; inspect container logs for the traceback.",
                 )
+                if once:
+                    raise
 
             if once:
                 break

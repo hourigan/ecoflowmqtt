@@ -1,19 +1,19 @@
 from __future__ import annotations
 
 import json
-import re
+import os
 import threading
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from ecoflow_mqtt.ecoflow import Device
 
 
-_UNSAFE_TOPIC_CHARS = re.compile(r"[^A-Za-z0-9_.-]+")
-
-
 def safe_topic_part(value: str) -> str:
-    return _UNSAFE_TOPIC_CHARS.sub("_", value).strip("_") or "value"
+    # Percent encoding keeps distinct source names distinct, including empty names.
+    return quote(value, safe="._-") or "%"
 
 
 def iter_leaf_values(value: Any, prefix: str = "") -> Iterator[tuple[str, Any]]:
@@ -33,6 +33,17 @@ def iter_leaf_values(value: Any, prefix: str = "") -> Iterator[tuple[str, Any]]:
         yield prefix, value
 
 
+def _iter_leaf_paths(value: Any, path: tuple[str, ...]) -> Iterator[tuple[tuple[str, ...], Any]]:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            yield from _iter_leaf_paths(child, (*path, str(key)))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            yield from _iter_leaf_paths(child, (*path, str(index)))
+    else:
+        yield path, value
+
+
 def _json_payload(value: Any) -> str:
     if isinstance(value, str):
         return value
@@ -50,6 +61,7 @@ class MqttPublisher:
         password: str | None = None,
         retain: bool = True,
         publish_individual: bool = True,
+        topic_state_file: str | None = None,
     ) -> None:
         import paho.mqtt.client as mqtt
 
@@ -61,6 +73,8 @@ class MqttPublisher:
         self._mqtt = mqtt
         self._connected = threading.Event()
         self._connect_error: str | None = None
+        self.topic_state_file = Path(topic_state_file) if topic_state_file else None
+        self._published_topics_by_device = self._load_topic_state()
         self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id)
         self.client.on_connect = self._on_connect
         self.client.on_disconnect = self._on_disconnect
@@ -89,17 +103,70 @@ class MqttPublisher:
             "device": device.raw,
         }
 
-        self._publish(f"{base_topic}/state", json.dumps(state, separators=(",", ":"), sort_keys=True))
-        self._publish(f"{base_topic}/online", json.dumps(device.online))
+        messages = {
+            f"{base_topic}/state": json.dumps(state, separators=(",", ":"), sort_keys=True),
+            f"{base_topic}/online": json.dumps(device.online),
+        }
 
         if self.publish_individual:
             for quota_name, quota_value in quotas.items():
-                topic = f"{base_topic}/quota/{safe_topic_part(str(quota_name))}"
-                self._publish(topic, _json_payload(quota_value))
+                quota_part = safe_topic_part(str(quota_name))
+                topic = f"{base_topic}/quota/{quota_part}"
+                messages[topic] = _json_payload(quota_value)
                 if isinstance(quota_value, (dict, list)):
-                    for leaf_name, leaf_value in iter_leaf_values(quota_value, str(quota_name)):
-                        leaf_topic = f"{base_topic}/quota/{safe_topic_part(leaf_name)}"
-                        self._publish(leaf_topic, _json_payload(leaf_value))
+                    for path, leaf_value in _iter_leaf_paths(quota_value, (str(quota_name),)):
+                        leaf_topic = f"{base_topic}/quota/" + "/".join(safe_topic_part(part) for part in path)
+                        messages[leaf_topic] = _json_payload(leaf_value)
+
+        previous = self._published_topics_by_device.get(device.sn, set())
+        # Record topics before publishing so a crash cannot leave new retained topics untracked.
+        self._published_topics_by_device[device.sn] = previous | messages.keys()
+        self._save_topic_state()
+        for topic, payload in messages.items():
+            self._publish(topic, payload)
+
+        for topic in previous - messages.keys():
+            self._clear_retained(topic)
+        self._published_topics_by_device[device.sn] = set(messages)
+        self._save_topic_state()
+
+    def finish_cycle(self, active_sns: set[str]) -> None:
+        for sn in set(self._published_topics_by_device) - active_sns:
+            for topic in self._published_topics_by_device[sn]:
+                self._clear_retained(topic)
+            del self._published_topics_by_device[sn]
+            self._save_topic_state()
+
+    def _load_topic_state(self) -> dict[str, set[str]]:
+        if self.topic_state_file is None or not self.topic_state_file.exists():
+            return {}
+        raw = json.loads(self.topic_state_file.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise ValueError(f"Invalid MQTT topic state file: {self.topic_state_file}")
+        topics_by_device: dict[str, set[str]] = {}
+        for sn, topics in raw.items():
+            if not isinstance(sn, str) or not isinstance(topics, list) or not all(
+                isinstance(topic, str) and topic.startswith(f"{self.topic_prefix}/{safe_topic_part(sn)}/")
+                for topic in topics
+            ):
+                raise ValueError(f"Invalid MQTT topic state file: {self.topic_state_file}")
+            topics_by_device[sn] = set(topics)
+        return topics_by_device
+
+    def _save_topic_state(self) -> None:
+        if self.topic_state_file is None:
+            return
+        self.topic_state_file.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = self.topic_state_file.with_name(f".{self.topic_state_file.name}.tmp")
+        state = {sn: sorted(topics) for sn, topics in self._published_topics_by_device.items()}
+        temp_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+        os.replace(temp_path, self.topic_state_file)
+
+    def _clear_retained(self, topic: str) -> None:
+        result = self.client.publish(topic, payload="", qos=0, retain=True)
+        result.wait_for_publish()
+        if result.rc != self._mqtt.MQTT_ERR_SUCCESS:
+            raise RuntimeError(f"Failed to clear retained MQTT topic {topic}: rc={result.rc}")
 
     def _publish(self, topic: str, payload: str) -> None:
         result = self.client.publish(topic, payload=payload, qos=0, retain=self.retain)

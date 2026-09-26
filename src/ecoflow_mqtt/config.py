@@ -123,6 +123,7 @@ class Config:
     mqtt_topic_prefix: str
     mqtt_retain: bool
     mqtt_publish_individual: bool
+    mqtt_topic_state_file: str
     health_status_file: str
     healthcheck_max_age_seconds: int
     log_level: str
@@ -150,6 +151,7 @@ class Config:
             mqtt_topic_prefix=(_get_value("MQTT_TOPIC_PREFIX", secrets) or "ecoflow").strip("/"),
             mqtt_retain=_get_bool("MQTT_RETAIN", True, secrets),
             mqtt_publish_individual=_get_bool("MQTT_PUBLISH_INDIVIDUAL", True, secrets),
+            mqtt_topic_state_file=_get_value("MQTT_TOPIC_STATE_FILE", secrets) or "/tmp/ecoflow-mqtt-topics.json",
             health_status_file=_get_value("HEALTH_STATUS_FILE", secrets) or "/tmp/ecoflow-mqtt-health.json",
             healthcheck_max_age_seconds=int(
                 _get_value("HEALTHCHECK_MAX_AGE_SECONDS", secrets)

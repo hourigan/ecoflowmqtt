@@ -23,11 +23,11 @@ The bridge publishes the full combined payload to:
 | `ecoflow/<device_sn>/online` | Device online state as JSON boolean. |
 | `ecoflow/<device_sn>/quota/<field>` | Individual quota value when `MQTT_PUBLISH_INDIVIDUAL=true`. |
 
-Unsafe MQTT topic characters are replaced with `_`. Dots are currently kept, so
-`energyStrategyOperateMode.operateSelfPoweredOpen` publishes as:
+Quota names are percent encoded, with nested object keys separated by `/`.
+The nested `energyStrategyOperateMode` field publishes as:
 
 ```text
-ecoflow/<device_sn>/quota/energyStrategyOperateMode.operateSelfPoweredOpen
+ecoflow/<device_sn>/quota/energyStrategyOperateMode/operateSelfPoweredOpen
 ```
 
 ## Device Metadata
